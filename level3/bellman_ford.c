@@ -19,6 +19,9 @@ static struct Graph *create_graph(int vertex_count, int edge_count) {
     if (vertex_count <= 0 || edge_count < 0) {
         return NULL;
     }
+    if ((size_t)edge_count > SIZE_MAX / sizeof(struct Edge)) {
+        return NULL;
+    }
 
     struct Graph *graph = malloc(sizeof(*graph));
     if (graph == NULL) {
@@ -61,6 +64,10 @@ static int bellman_ford(const struct Graph *graph, int source) {
         }
     }
 
+    if ((size_t)graph->vertex_count > SIZE_MAX / sizeof(int64_t)) {
+        fprintf(stderr, "Error: distance array size is too large.\n");
+        return -1;
+    }
     int64_t *distances = malloc((size_t)graph->vertex_count * sizeof(*distances));
     if (distances == NULL) {
         fprintf(stderr, "Error: unable to allocate distance array.\n");

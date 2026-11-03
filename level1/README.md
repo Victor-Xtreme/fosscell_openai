@@ -6,6 +6,12 @@
 
 The module has a chunked binary fast path that can distribute parsing and percentile work across forked worker processes. If data does not fit the fast parser's assumptions, it uses a reference implementation that processes the file as UTF-8 text. The code does **not** define a `DataProcessor` class and does not implement numerical dataset CSV import/export; its input and output are request-log and summary text files.
 
+> **Task specification mismatch:** `INSTRUCTIONS.md` asks for a `DataProcessor`
+> class, Python 3.7+, and `math`/`csv`/`typing` APIs. None of those appear in
+> `data_processor.py`; the actual program uses a different interface and
+> requires Python 3.9+ on POSIX. This README documents the checked-in program
+> rather than describing methods that do not exist.
+
 ## 2. Requirements & Setup
 
 - **Python:** 3.9 or newer. The code calls `os.waitstatus_to_exitcode`, which is available starting with Python 3.9.
@@ -37,13 +43,20 @@ Optional environment variables:
 
 The source does not use Python type annotations. The signatures and types below describe its implementation. Functions whose names do not begin with an underscore are listed here; several are low-level helpers intended for use by the driver rather than typical callers.
 
+The `DataProcessor` constructor and methods named in `INSTRUCTIONS.md`
+(`__init__`, `add_data`, `batch_add`, the calculation methods,
+`get_summary_statistics`, `filter_data`, `transform_data`, `export_to_csv`,
+and `load_from_csv`) are **not defined** in this source file. Their parameters,
+return values, exceptions, and CSV examples cannot be documented as working API
+without changing the program itself.
+
 ### `main(data_dir, out_dir)`
 
 ```python
 main(data_dir, out_dir) -> None
 ```
 
-Runs the processing pipeline and writes `summary.txt`. It disables garbage collection, tries `fast_main`, retries the fast path in single-process mode after an unexpected exception, and finally invokes `reference_main` if the retry fails. Returns `None`.
+Runs the processing pipeline and writes `summary.txt`. It temporarily disables garbage collection, tries `fast_main`, retries the fast path in single-process mode after an unexpected exception, and finally invokes `reference_main` if the retry fails. It restores garbage collection to its prior enabled/disabled state before returning or propagating an exception. Returns `None`.
 
 **Parameters:** `data_dir` and `out_dir` are path strings accepted by `os.path.join` and filesystem operations.
 

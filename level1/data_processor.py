@@ -70,6 +70,21 @@ def _count_errors(eps, sts, m):
     return errs
 
 
+def _accumulate_group(acc, key, error_count, latencies):
+    """Convert and merge one endpoint/hour latency group into the accumulator."""
+    try:
+        values = array("I", map(int, latencies))
+    except (OverflowError, ValueError):
+        raise Fallback
+
+    current = acc.get(key)
+    if current is None:
+        acc[key] = [error_count, values]
+    else:
+        current[0] += error_count
+        current[1].extend(values)
+
+
 def _add_segment(h, eps, sts, lats, acc):
     """All lines share the hour label h."""
     d = {}
@@ -81,17 +96,7 @@ def _add_segment(h, eps, sts, lats, acc):
     errs = _count_errors(eps, sts, len(eps))
     eget = errs.get
     for e, toks in d.items():
-        key = (h, e)
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [eget(e, 0), arr]
-        else:
-            a[0] += eget(e, 0)
-            a[1].extend(arr)
+        _accumulate_group(acc, (h, e), eget(e, 0), toks)
 
 
 def _add_general(ts, eps, sts, lats, acc):
@@ -108,16 +113,7 @@ def _add_general(ts, eps, sts, lats, acc):
         if s in s5:
             r[1] += 1
     for key, (toks, n5) in d.items():
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [n5, arr]
-        else:
-            a[0] += n5
-            a[1].extend(arr)
+        _accumulate_group(acc, key, n5, toks)
 
 
 def parse_chunk(buf, acc):
@@ -513,16 +509,21 @@ def reference_main(data_dir, out_dir):
 
 
 def main(data_dir, out_dir):
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        fast_main(data_dir, out_dir)
-    except Fallback:                     # input is not what the fast path assumes
-        reference_main(data_dir, out_dir)
-    except Exception:                    # fork/OOM/etc.: retry without processes first
         try:
-            fast_main(data_dir, out_dir, single=True)
-        except Exception:
+            fast_main(data_dir, out_dir)
+        except Fallback:                 # input is not what the fast path assumes
             reference_main(data_dir, out_dir)
+        except Exception:                # fork/OOM/etc.: retry without processes first
+            try:
+                fast_main(data_dir, out_dir, single=True)
+            except Exception:
+                reference_main(data_dir, out_dir)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def _parse_args(argv):

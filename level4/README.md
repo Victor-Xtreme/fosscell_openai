@@ -12,6 +12,11 @@ Reactions resolve from the contact seam: a vowel and consonant annihilate, and
 matching letters (case-insensitive) fuse into one uppercase letter. On odd
 dimensions, the middle row or column remains stationary as the crease.
 
+For `grid = [["a", "b", "c", "d"], ["e", "f", "g", "h"]]`, folding
+left returns `["_c", "_g"]`: the vowel/consonant pairs annihilate and the
+remaining stacks show `c` and `g` from above. If both colliding letters
+annihilate and leave a cell empty, that cell appears as `_`.
+
 ```python
 from matrix_squeezer import squeeze_matrix
 
@@ -23,3 +28,7 @@ print(squeeze_matrix(grid, ["left"]))
 ```
 
 The module uses only the Python standard library.
+
+The function raises `ValueError` for an empty or ragged grid, non-letter cell
+contents, or an unsupported fold direction. It raises `TypeError` when a cell
+or the folds argument cannot be iterated as required.

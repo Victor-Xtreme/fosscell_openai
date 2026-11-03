@@ -25,13 +25,18 @@ static int partition_array(int values[], int low, int high) {
 }
 
 static void quick_sort(int values[], int low, int high) {
-    if (low >= high) {
-        return;
-    }
+    while (low < high) {
+        int pivot_index = partition_array(values, low, high);
 
-    int pivot_index = partition_array(values, low, high);
-    quick_sort(values, low, pivot_index - 1);
-    quick_sort(values, pivot_index + 1, high);
+        /* Recurse into the smaller side to keep stack use logarithmic. */
+        if (pivot_index - low < high - pivot_index) {
+            quick_sort(values, low, pivot_index - 1);
+            low = pivot_index + 1;
+        } else {
+            quick_sort(values, pivot_index + 1, high);
+            high = pivot_index - 1;
+        }
+    }
 }
 
 static void print_array(const int values[], int size) {

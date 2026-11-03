@@ -121,13 +121,13 @@ def squeeze_matrix(grid: Sequence[Sequence[Union[str, Iterable[str]]]],
         ValueError: if the grid is empty, ragged, contains invalid letters, or
             a fold direction is not left, right, up, or down.
     """
-    if not grid:
-        raise ValueError("grid must contain at least one row")
-
     try:
         rows = [list(row) for row in grid]
     except TypeError as exc:
         raise TypeError("grid must be an iterable of rows") from exc
+
+    if not rows:
+        raise ValueError("grid must contain at least one row")
 
     width = len(rows[0])
     if width == 0 or any(len(row) != width for row in rows):
