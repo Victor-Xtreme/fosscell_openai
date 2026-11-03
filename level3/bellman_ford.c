@@ -77,6 +77,16 @@ static void destroy_graph(struct Graph *graph) {
     free(graph);
 }
 
+static int safe_add_distance(long long distance, int weight, long long *result) {
+    if ((weight > 0 && distance > LLONG_MAX - weight) ||
+        (weight < 0 && distance < LLONG_MIN - weight)) {
+        return 0;
+    }
+
+    *result = distance + weight;
+    return 1;
+}
+
 static int bellman_ford(const struct Graph *graph, int source) {
     long long *distance = malloc((size_t)graph->vertex_count * sizeof(*distance));
     if (distance == NULL) {
@@ -99,9 +109,10 @@ static int bellman_ford(const struct Graph *graph, int source) {
 
             for (const struct Edge *edge = graph->adjacency[vertex];
                  edge != NULL; edge = edge->next) {
-                if (distance[vertex] != LLONG_MAX &&
-                    distance[vertex] + edge->weight < distance[edge->dest]) {
-                    distance[edge->dest] = distance[vertex] + edge->weight;
+                long long candidate;
+                if (safe_add_distance(distance[vertex], edge->weight, &candidate) &&
+                    candidate < distance[edge->dest]) {
+                    distance[edge->dest] = candidate;
                     changed = 1;
                 }
             }
@@ -119,8 +130,9 @@ static int bellman_ford(const struct Graph *graph, int source) {
 
         for (const struct Edge *edge = graph->adjacency[vertex];
              edge != NULL; edge = edge->next) {
-            if (distance[vertex] != LLONG_MAX &&
-                distance[vertex] + edge->weight < distance[edge->dest]) {
+            long long candidate;
+            if (safe_add_distance(distance[vertex], edge->weight, &candidate) &&
+                candidate < distance[edge->dest]) {
                 printf("Graph contains a negative weight cycle.\n");
                 free(distance);
                 return 0;
