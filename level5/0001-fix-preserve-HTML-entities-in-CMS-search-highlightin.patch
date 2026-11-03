@@ -1,0 +1,144 @@
+From 33b98da471f67a41047e80e5866d3190cd676223 Mon Sep 17 00:00:00 2001
+From: Darshan <darshandsmail@gmail.com>
+Date: Tue, 3 Nov 2026 19:38:23 +0530
+Subject: [PATCH] fix: preserve HTML entities in CMS search highlighting
+
+---
+ Plastopol CMS/package.json          |  5 +--
+ Plastopol CMS/src/lib/search.ts     |  8 ++++-
+ Plastopol CMS/tests/README.md       | 21 +++++++++++
+ Plastopol CMS/tests/search.test.mjs | 54 +++++++++++++++++++++++++++++
+ 4 files changed, 85 insertions(+), 3 deletions(-)
+ create mode 100644 Plastopol CMS/tests/README.md
+ create mode 100644 Plastopol CMS/tests/search.test.mjs
+
+diff --git a/Plastopol CMS/package.json b/Plastopol CMS/package.json
+index db7a950..dd53d39 100644
+--- a/Plastopol CMS/package.json	
++++ b/Plastopol CMS/package.json	
+@@ -8,7 +8,8 @@
+   "frontend": "vite",
+   "build": "tauri build",
+   "frontend:build": "tsc && vite build",
+-  "preview": "vite preview"
++  "preview": "vite preview",
++  "test": "node --experimental-strip-types --test tests/search.test.mjs"
+ },
+   "dependencies": {
+     "@tauri-apps/api": "^2.10.1",
+@@ -21,4 +22,4 @@
+     "typescript": "~5.6.2",
+     "vite": "^6.0.3"
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/Plastopol CMS/src/lib/search.ts b/Plastopol CMS/src/lib/search.ts
+index 9c03ec6..20759a5 100644
+--- a/Plastopol CMS/src/lib/search.ts	
++++ b/Plastopol CMS/src/lib/search.ts	
+@@ -35,7 +35,13 @@ export function highlightText(text: string, query: string): string {
+   if (!query.trim()) return escapeHtml(text);
+   const escaped = escapeRegex(query.trim());
+   const re = new RegExp(`(${escaped})`, "gi");
+-  return escapeHtml(text).replace(re, "<mark>$1</mark>");
++  // Match the original text so highlighting cannot split an HTML entity.
++  // The capture group keeps matches at odd indices; escape every segment
++  // before adding our own markup for the sidebar's innerHTML.
++  return text.split(re).map((part, index) => {
++    const safe = escapeHtml(part);
++    return index % 2 === 1 ? `<mark>${safe}</mark>` : safe;
++  }).join("");
+ }
+ 
+ function escapeHtml(str: string): string {
+diff --git a/Plastopol CMS/tests/README.md b/Plastopol CMS/tests/README.md
+new file mode 100644
+index 0000000..a45170d
+--- /dev/null
++++ b/Plastopol CMS/tests/README.md	
+@@ -0,0 +1,21 @@
++# Search highlighting regression tests
++
++From `Plastopol CMS`, run:
++
++```sh
++npm test
++```
++
++The tests use Node's built-in test runner and TypeScript stripping, tested with
++Node 24.19.0. No npm install or running Tauri application is needed.
++
++The sidebar inserts `highlightText()` output into HTML. Matching after HTML
++escaping used to split entities: searching `&` in `A & B` produced
++`A <mark>&</mark>amp; B`, changing the displayed name. Searching `amp` could
++also highlight characters absent from the original name.
++
++The function now matches the original text and escapes both matched and
++unmatched segments before wrapping matches in `<mark>`. The checks cover
++literal ampersands and brackets, entity-looking names, escaped markup,
++case-insensitive repeated matches, literal regex symbols, and empty queries.
++No search filtering or sidebar rendering API changes are involved.
+diff --git a/Plastopol CMS/tests/search.test.mjs b/Plastopol CMS/tests/search.test.mjs
+new file mode 100644
+index 0000000..fae1a99
+--- /dev/null
++++ b/Plastopol CMS/tests/search.test.mjs	
+@@ -0,0 +1,54 @@
++import assert from "node:assert/strict";
++import test from "node:test";
++import { highlightText } from "../src/lib/search.ts";
++
++test("highlights literal ampersands without splitting HTML entities", () => {
++  assert.equal(highlightText("A & B", "&"), "A <mark>&amp;</mark> B");
++});
++
++test("highlights angle brackets after escaping them", () => {
++  assert.equal(
++    highlightText("Chair <Large>", "<Large>"),
++    "Chair <mark>&lt;Large&gt;</mark>"
++  );
++});
++
++test("does not match text introduced by HTML escaping", () => {
++  assert.equal(highlightText("A & B", "amp"), "A &amp; B");
++  assert.equal(highlightText("<Chair>", "lt"), "&lt;Chair&gt;");
++});
++
++test("escapes matched and unmatched markup as text", () => {
++  assert.equal(
++    highlightText('<img src=x onerror="alert(1)"> Chair', "img"),
++    '&lt;<mark>img</mark> src=x onerror="alert(1)"&gt; Chair'
++  );
++  assert.equal(
++    highlightText("<script>alert(1)</script>", "<script>"),
++    "<mark>&lt;script&gt;</mark>alert(1)&lt;/script&gt;"
++  );
++});
++
++test("keeps repeated case-insensitive matches and their original casing", () => {
++  assert.equal(
++    highlightText("Chair chair CHAIR", "  chair  "),
++    "<mark>Chair</mark> <mark>chair</mark> <mark>CHAIR</mark>"
++  );
++});
++
++test("treats regular-expression syntax as literal text", () => {
++  for (const query of [".", "*", "+", "?", "^", "$", "{", "}", "(", ")", "|", "[", "]", "\\"]) {
++    assert.equal(highlightText(`A${query}B`, query), `A<mark>${query}</mark>B`);
++  }
++});
++
++test("preserves literal entity-looking product names", () => {
++  assert.equal(highlightText("&amp;", "&"), "<mark>&amp;</mark>amp;");
++});
++
++test("escapes text with empty, whitespace-only, or unmatched queries", () => {
++  for (const query of ["", "   ", "desk"]) {
++    assert.equal(highlightText("A & <B>", query), "A &amp; &lt;B&gt;");
++  }
++  assert.equal(highlightText("", "chair"), "");
++});
+-- 
+2.55.0.windows.3
+
