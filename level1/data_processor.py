@@ -1,10 +1,123 @@
 import gc
+import csv
+import math
 import marshal
 import os
 import sys
 from array import array
 from bisect import bisect_left, bisect_right
 from itertools import compress
+from typing import Iterable, List, Optional, Union
+
+Number = Union[int, float]
+
+
+class DataProcessor:
+    """Store numeric observations and provide simple statistics and transforms."""
+
+    def __init__(self, initial_data: Optional[Iterable[Number]] = None) -> None:
+        self.data: List[Number] = []
+        if initial_data is not None:
+            self.batch_add(initial_data)
+
+    @staticmethod
+    def _number(value: Number) -> Number:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("data values must be integers or floats (not bool)")
+        if isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("data values must be finite")
+        return value
+
+    def add_data(self, item: Number) -> None:
+        """Append one numeric observation."""
+        self.data.append(self._number(item))
+
+    def batch_add(self, items: Iterable[Number]) -> None:
+        """Validate and append an iterable of numeric observations atomically."""
+        values = [self._number(item) for item in items]
+        self.data.extend(values)
+
+    def calculate_mean(self) -> float:
+        self._require_data()
+        return math.fsum(self.data) / len(self.data)
+
+    def calculate_median(self) -> float:
+        self._require_data()
+        values = sorted(self.data)
+        middle = len(values) // 2
+        if len(values) % 2:
+            return float(values[middle])
+        return (values[middle - 1] + values[middle]) / 2
+
+    def calculate_variance(self) -> float:
+        self._require_data()
+        mean = self.calculate_mean()
+        return math.fsum((value - mean) ** 2 for value in self.data) / len(self.data)
+
+    def calculate_std_dev(self) -> float:
+        return math.sqrt(self.calculate_variance())
+
+    def get_summary_statistics(self):
+        self._require_data()
+        return {
+            "count": len(self.data),
+            "mean": self.calculate_mean(),
+            "median": self.calculate_median(),
+            "variance": self.calculate_variance(),
+            "std_dev": self.calculate_std_dev(),
+            "min": min(self.data),
+            "max": max(self.data),
+        }
+
+    def filter_data(self, min_val: Optional[Number] = None,
+                    max_val: Optional[Number] = None) -> List[Number]:
+        if min_val is not None:
+            min_val = self._number(min_val)
+        if max_val is not None:
+            max_val = self._number(max_val)
+        if min_val is not None and max_val is not None and min_val > max_val:
+            raise ValueError("min_val must be less than or equal to max_val")
+        return [value for value in self.data
+                if (min_val is None or value >= min_val)
+                and (max_val is None or value <= max_val)]
+
+    def transform_data(self, factor: Number, offset: Number) -> List[Number]:
+        factor = self._number(factor)
+        offset = self._number(offset)
+        transformed = [value * factor + offset for value in self.data]
+        self.data = [self._number(value) for value in transformed]
+        return list(self.data)
+
+    def export_to_csv(self, filepath: str) -> None:
+        with open(filepath, "w", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["value"])
+            writer.writerows((value,) for value in self.data)
+
+    def load_from_csv(self, filepath: str) -> None:
+        loaded = []
+        with open(filepath, "r", newline="", encoding="utf-8") as stream:
+            reader = csv.reader(stream)
+            first = True
+            for row in reader:
+                if first and row == ["value"]:
+                    first = False
+                    continue
+                first = False
+                if len(row) != 1:
+                    raise ValueError("each CSV row must contain exactly one value")
+                try:
+                    value = float(row[0])
+                except (TypeError, ValueError):
+                    raise ValueError("CSV values must be numeric")
+                if not math.isfinite(value):
+                    raise ValueError("CSV values must be finite")
+                loaded.append(value)
+        self.data = loaded
+
+    def _require_data(self) -> None:
+        if not self.data:
+            raise ValueError("statistics are undefined for an empty dataset")
 
 INPUT_NAME = "requests.log"
 OUTPUT_NAME = "summary.txt"
@@ -70,54 +183,60 @@ def _count_errors(eps, sts, m):
     return errs
 
 
-def _add_segment(h, eps, sts, lats, acc):
-    """All lines share the hour label h."""
-    d = {}
-    for e, l in zip(eps, lats):
+def _merge_group(key, error_count, latency_tokens, accumulator):
+    """Convert and merge one (hour, endpoint) group into the accumulator."""
+    try:
+        latency_values = array("I", map(int, latency_tokens))
+    except (OverflowError, ValueError):
+        raise Fallback
+
+    group = accumulator.get(key)
+    if group is None:
+        accumulator[key] = [error_count, latency_values]
+    else:
+        group[0] += error_count
+        group[1].extend(latency_values)
+
+
+def _add_segment(hour, endpoints, statuses, latency_tokens, accumulator):
+    """Accumulate a segment whose lines all share one hour label."""
+    latencies_by_endpoint = {}
+    for endpoint, latency in zip(endpoints, latency_tokens):
         try:
-            d[e].append(l)
+            latencies_by_endpoint[endpoint].append(latency)
         except KeyError:
-            d[e] = [l]
-    errs = _count_errors(eps, sts, len(eps))
-    eget = errs.get
-    for e, toks in d.items():
-        key = (h, e)
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [eget(e, 0), arr]
-        else:
-            a[0] += eget(e, 0)
-            a[1].extend(arr)
+            latencies_by_endpoint[endpoint] = [latency]
+
+    errors_by_endpoint = _count_errors(endpoints, statuses, len(endpoints))
+    for endpoint, endpoint_latencies in latencies_by_endpoint.items():
+        _merge_group(
+            (hour, endpoint),
+            errors_by_endpoint.get(endpoint, 0),
+            endpoint_latencies,
+            accumulator,
+        )
 
 
-def _add_general(ts, eps, sts, lats, acc):
+def _add_general(timestamps, endpoints, statuses, latency_tokens, accumulator):
     """Arbitrary hour mix inside the chunk: key every line."""
-    s5 = {s for s in set(sts) if 500 <= int(s) <= 599}
-    d = {}
-    for t, e, s, l in zip(ts, eps, sts, lats):
-        k = (t[:HOUR_LEN], e)
+    error_statuses = {
+        status for status in set(statuses)
+        if 500 <= int(status) <= 599
+    }
+    grouped = {}
+    for timestamp, endpoint, status, latency in zip(
+            timestamps, endpoints, statuses, latency_tokens):
+        key = (timestamp[:HOUR_LEN], endpoint)
         try:
-            r = d[k]
+            group = grouped[key]
         except KeyError:
-            r = d[k] = [[], 0]
-        r[0].append(l)
-        if s in s5:
-            r[1] += 1
-    for key, (toks, n5) in d.items():
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [n5, arr]
-        else:
-            a[0] += n5
-            a[1].extend(arr)
+            group = grouped[key] = [[], 0]
+        group[0].append(latency)
+        if status in error_statuses:
+            group[1] += 1
+
+    for key, (group_latencies, error_count) in grouped.items():
+        _merge_group(key, error_count, group_latencies, accumulator)
 
 
 def parse_chunk(buf, acc):
@@ -513,16 +632,21 @@ def reference_main(data_dir, out_dir):
 
 
 def main(data_dir, out_dir):
+    garbage_collection_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        fast_main(data_dir, out_dir)
-    except Fallback:                     # input is not what the fast path assumes
-        reference_main(data_dir, out_dir)
-    except Exception:                    # fork/OOM/etc.: retry without processes first
         try:
-            fast_main(data_dir, out_dir, single=True)
-        except Exception:
+            fast_main(data_dir, out_dir)
+        except Fallback:                 # input is not what the fast path assumes
             reference_main(data_dir, out_dir)
+        except Exception:                # fork/OOM/etc.: retry without processes first
+            try:
+                fast_main(data_dir, out_dir, single=True)
+            except Exception:
+                reference_main(data_dir, out_dir)
+    finally:
+        if garbage_collection_was_enabled:
+            gc.enable()
 
 
 def _parse_args(argv):
