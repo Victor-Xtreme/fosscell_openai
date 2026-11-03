@@ -70,6 +70,7 @@ def _count_errors(eps, sts, m):
     return errs
 
 
+# Shared accumulator update factored out of _add_segment and _add_general.
 def _merge_group(key, latency_tokens, error_count, acc):
     """Convert latencies and merge one (hour, endpoint) group into the accumulator."""
     try:
@@ -95,6 +96,7 @@ def _add_segment(h, eps, sts, lats, acc):
     errs = _count_errors(eps, sts, len(eps))
     eget = errs.get
     for e, toks in d.items():
+        # Use the shared conversion and accumulator merge helper.
         _merge_group((h, e), toks, eget(e, 0), acc)
 
 
@@ -112,6 +114,7 @@ def _add_general(ts, eps, sts, lats, acc):
         if s in s5:
             r[1] += 1
     for key, (toks, n5) in d.items():
+        # Use the same merge path as the single-hour segment case.
         _merge_group(key, toks, n5, acc)
 
 
