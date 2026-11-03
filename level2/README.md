@@ -7,3 +7,7 @@ Look for:
 - Inconsistent variable naming (e.g., snake_case vs camelCase).
 - Inconsistent error handling patterns.
 - Repeated logic that could be refactored.
+
+
+
+# AHEM THIS README.md doesnt match the directory its in 
