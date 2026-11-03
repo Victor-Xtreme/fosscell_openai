@@ -514,16 +514,21 @@ def reference_main(data_dir, out_dir):
 
 
 def main(data_dir, out_dir):
+    gc_was_enabled = gc.isenabled()
     gc.disable()
     try:
-        fast_main(data_dir, out_dir)
-    except Fallback:                     # input is not what the fast path assumes
-        reference_main(data_dir, out_dir)
-    except Exception:                    # fork/OOM/etc.: retry without processes first
         try:
-            fast_main(data_dir, out_dir, single=True)
-        except Exception:
+            fast_main(data_dir, out_dir)
+        except Fallback:                 # input is not what the fast path assumes
             reference_main(data_dir, out_dir)
+        except Exception:                # retry without worker processes first
+            try:
+                fast_main(data_dir, out_dir, single=True)
+            except Exception:
+                reference_main(data_dir, out_dir)
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
 
 def _parse_args(argv):
