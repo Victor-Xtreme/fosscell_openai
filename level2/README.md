@@ -1,6 +1,6 @@
 # Level 2: Debugging Inconsistencies
 
-Your task is to identify and fix code inconsistencies in `data_processor.py`. 
+Your task is to identify and fix code inconsistencies in `quicksort.c`.
 These are not syntactic errors; the code will run, but it follows poor practices or violates internal consistency.
 
 Look for:
