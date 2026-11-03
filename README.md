@@ -99,37 +99,37 @@ int main(void) {
 }
 2. Problems identified and fixed Original issue
 Correction
-SwapElements()
+SwapElements(),
 	changed to swap_elements()
 
-QuickSort()
+QuickSort(),
 	Changed to quick_sort()
 
-printArray()
+printArray(),
 	Changed to print_array()
 
-Mixed naming styles
+Mixed naming styles,
 	Standardized to snake_case
 
-No memory allocation check
+No memory allocation check,
 	Added data == NULL check
 
-Missing free()
+Missing free(),
 	Added free(data)
 
-Hardcoded array size
+Hardcoded array size,
 	Introduced size variable
 
-Inconsistent indentation
+Inconsistent indentation,
 	Standardized indentation
 
-Repeated array initialization
+Repeated array initialization,
 	Used an initialization array
 
-Unclear variable pi
+Unclear variable pi,
 	Changed to pivot_index
 
-Missing const
+Missing const,
 	Added const to the print function
   
   
