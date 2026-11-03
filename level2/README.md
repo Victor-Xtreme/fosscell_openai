@@ -1,9 +1,18 @@
 # Level 2: Debugging Inconsistencies
 
-Your task is to identify and fix code inconsistencies in `data_processor.py`. 
-These are not syntactic errors; the code will run, but it follows poor practices or violates internal consistency.
+## Task
 
-Look for:
-- Inconsistent variable naming (e.g., snake_case vs camelCase).
-- Inconsistent error handling patterns.
-- Repeated logic that could be refactored.
+Review and fix the inconsistencies and unsafe practices in [`quicksort.c`](quicksort.c).
+
+The solution uses consistent `snake_case` names and formatting, removes an unused header and constant, checks allocation failure, and releases allocated memory before exiting. The quicksort handles empty and one-element ranges through its base case.
+
+## Build and run
+
+Compile with a C compiler that supports C99 or newer:
+
+```sh
+cc -std=c99 -Wall -Wextra -Wpedantic quicksort.c -o quicksort
+./quicksort
+```
+
+The program prints the original and sorted arrays.
