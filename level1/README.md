@@ -1,73 +1,194 @@
 # Request Log Ingestor
 
-A command-line processor for large `requests.log` files. It groups request records by UTC hour and endpoint, then writes request counts, latency percentiles, HTTP 5xx counts, and an error rate in parts per million to `summary.txt`. The fast path parses binary chunks and can use multiple forked worker processes; a reference implementation is used when the input does not fit the fast parser's assumptions or when the parallel path fails.
+## 1. Overview
 
-## Requirements
+`data_processor.py` is a command-line program for summarizing large request logs. It reads `requests.log`, groups requests by hour and endpoint, calculates request counts and latency percentiles, counts HTTP 5xx responses, and writes the results to `summary.txt`.
 
-- Python 3.9 or newer. The implementation uses `os.waitstatus_to_exitcode` and POSIX process/file APIs.
-- POSIX operating system with `os.fork` and `os.pread` (for example, Linux). The multiprocessing fast path is not portable to native Windows.
-- Standard library only: `gc`, `marshal`, `os`, `sys`, `array`, `bisect`, `itertools`, and (on selected paths) `collections` and `datetime`.
+The module has a chunked binary fast path that can distribute parsing and percentile work across forked worker processes. If data does not fit the fast parser's assumptions, it uses a reference implementation that processes the file as UTF-8 text. The code does **not** define a `DataProcessor` class and does not implement numerical dataset CSV import/export; its input and output are request-log and summary text files.
 
-The program is a script, not a `DataProcessor` class or import-oriented library. Save it as `a_ingest_fast.py` (or use its actual filename) and run it with Python.
+## 2. Requirements & Setup
 
-## Input format
+- **Python:** 3.9 or newer. The code calls `os.waitstatus_to_exitcode`, which is available starting with Python 3.9.
+- **Platform:** POSIX, such as Linux. The implementation uses `os.fork` and `os.pread`; the parallel fast path does not run on native Windows.
+- **Dependencies:** Python standard library only: `gc`, `marshal`, `os`, `sys`, `array`, `bisect`, `itertools`, plus `collections` and `datetime` in selected paths.
 
-The input filename is fixed as `requests.log` inside the data directory. Each line must contain five fields separated by single spaces:
-
-```text
-<timestamp> <method> <endpoint> <status> <latency_us>
-```
-
-Example:
-
-```text
-2025-03-08T10:15:30.123456+00:00 GET /api/items 200 1250
-2025-03-08T10:18:02.000000+00:00 POST /api/items 503 8700
-```
-
-Timestamps must include fractional seconds and a timezone offset; the documented format is `%Y-%m-%dT%H:%M:%S.%f%z`. The fast parser is optimized for timestamps ending in `Z`, which represent UTC. Latencies are integer microseconds. Endpoints must not contain spaces because the input is split into five fields.
-
-For reliable results, use valid timestamps and integer status and latency fields on every line. The fast path is optimized for three-character status codes and unsigned 32-bit latency values; unusual status widths or latencies outside that range cause the reference path to be used. The reference parser also expects exactly one space between fields.
-
-## Run
+The script expects a file named `requests.log` in the data directory. Run it from the directory containing the script:
 
 ```bash
-python a_ingest_fast.py --data ./data --out ./out
+python data_processor.py --data ./data --out ./out
 ```
 
-This reads `./data/requests.log`, creates the output directory if needed, and writes `./out/summary.txt`. If options are omitted, the defaults are `/data` and `/out`.
-
-Options can be provided as separate arguments or with `=`:
+This reads `./data/requests.log`, creates `./out` if needed, and writes `./out/summary.txt`. Without options, the directories default to `/data` and `/out`.
 
 ```text
---data DIRECTORY   Directory containing requests.log (default: /data)
---out DIRECTORY    Destination directory (default: /out)
--h, --help         Show usage
+--data DIRECTORY   Directory containing requests.log
+--out DIRECTORY    Directory for summary.txt
+-h, --help         Display usage
 ```
 
-The worker count can be set with `A_INGEST_WORKERS` (minimum effective value is one). `A_INGEST_CHUNK` controls the fast parser's read chunk size in bytes and defaults to 262144. If `A_INGEST_WORKERS` is unset, the program detects available CPUs and attempts to honor a Linux cgroup CPU quota. Smaller input files are processed with one worker regardless.
+Options may also be written as `--data=./data` and `--out=./out`. The module can be imported, but it is designed as a script; its primary entry point is `main(data_dir, out_dir)`.
 
-## Output
+Optional environment variables:
 
-`summary.txt` contains one row per `(hour, endpoint)`, sorted by hour and endpoint. Rows have space-separated fields:
+- `A_INGEST_WORKERS`: worker count; values are clamped to a minimum of one. When unset, the program detects available CPUs and attempts to honor Linux cgroup CPU quotas.
+- `A_INGEST_CHUNK`: fast-path read chunk size in bytes; defaults to `262144`. Set it to a positive integer.
+
+## 3. API Reference
+
+The source does not use Python type annotations. The signatures and types below describe its implementation. Functions whose names do not begin with an underscore are listed here; several are low-level helpers intended for use by the driver rather than typical callers.
+
+### `main(data_dir, out_dir)`
+
+```python
+main(data_dir, out_dir) -> None
+```
+
+Runs the processing pipeline and writes `summary.txt`. It disables garbage collection, tries `fast_main`, retries the fast path in single-process mode after an unexpected exception, and finally invokes `reference_main` if the retry fails. Returns `None`.
+
+**Parameters:** `data_dir` and `out_dir` are path strings accepted by `os.path.join` and filesystem operations.
+
+**Exceptions:** Exceptions raised by the final reference pass propagate, including `OSError` for file access, `ValueError` for malformed timestamps or integer fields, and `UnicodeDecodeError` for invalid UTF-8 input.
+
+### `fast_main(data_dir, out_dir, single=False)`
+
+```python
+fast_main(data_dir, out_dir, single=False) -> None
+```
+
+Runs the optimized binary parser, aggregation, percentile calculation, and report writer. If `single` is true, it avoids worker parallelism. Returns `None`.
+
+**Parameters:** `data_dir` is the input directory; `out_dir` is the output directory; `single` is a boolean selecting serial execution.
+
+**Exceptions:** `Fallback` indicates input or read conditions requiring the reference implementation. `WorkerFailed` indicates an unsuccessful child process. Filesystem operations may raise `OSError` (including `FileNotFoundError`); serialization, parsing, and process operations may raise their underlying exceptions. `main` handles fast-path exceptions as described above.
+
+### `reference_main(data_dir, out_dir)`
+
+```python
+reference_main(data_dir, out_dir) -> None
+```
+
+Reads and processes the entire input as UTF-8 text, then writes the summary file. Returns `None`.
+
+**Parameters:** `data_dir` is the input directory; `out_dir` is the output directory.
+
+**Exceptions:** `OSError` for input/output failures; `ValueError` for malformed records, timestamps, or integer fields; `UnicodeDecodeError` for invalid UTF-8. These errors are not suppressed when this is the final processing attempt.
+
+### `cpu_budget()`
+
+```python
+cpu_budget() -> int
+```
+
+Returns a cached estimate of available worker processes, with a minimum of one. It honors `A_INGEST_WORKERS` when set; otherwise it checks CPU availability and supported cgroup quota files.
+
+**Exceptions:** `ValueError` if `A_INGEST_WORKERS` is not an integer. The driver may respond by using the reference implementation.
+
+### `parse_chunk(buf, acc)`
+
+```python
+parse_chunk(buf, acc) -> None
+```
+
+Parses a bytes buffer containing complete request records and updates `acc`, a dictionary keyed by `(hour_bytes, endpoint_bytes)`. Each value accumulates an error count and unsigned integer latency values. An empty buffer is ignored.
+
+**Parameters:** `buf` is `bytes`; `acc` is a mutable accumulator dictionary in the internal format expected by the implementation.
+
+**Exceptions:** `Fallback` when token counts or fast-path assumptions fail; conversion and type errors can propagate for malformed data or incompatible arguments.
+
+### `process_range(fd, a, b, acc)`
+
+```python
+process_range(fd, a, b, acc) -> None
+```
+
+Reads and parses the file byte range `[a, b)` from file descriptor `fd`, updating `acc`. Reads are aligned to whole lines by the task-boundary logic.
+
+**Parameters:** `fd` is an open file descriptor usable by `os.pread`; `a` and `b` are byte offsets; `acc` is the accumulator dictionary.
+
+**Exceptions:** `OSError` for read failures; `Fallback` for short reads or data requiring the reference path; exceptions from `parse_chunk` may propagate.
+
+### `line_bounds(fd, size, ntasks)`
+
+```python
+line_bounds(fd, size, ntasks) -> list[int]
+```
+
+Returns file offsets that divide `size` bytes into `ntasks` ranges, with interior boundaries aligned to line starts. The returned list has `ntasks + 1` entries, beginning at zero and ending at `size`.
+
+**Parameters:** `fd` is a readable file descriptor supporting `os.pread`; `size` is the file size in bytes; `ntasks` is the desired positive task count.
+
+**Exceptions:** `OSError` for file read errors; invalid arguments may cause arithmetic or API errors.
+
+### `spawn(fn)` and `collect(children)`
+
+```python
+spawn(fn) -> tuple[int, int]
+collect(children) -> list[bytes]
+```
+
+`spawn` forks a child that executes zero-argument callable `fn` and returns `(pid, read_fd)` in the parent. `collect` consumes `(pid, read_fd)` pairs, returning each child's bytes in order.
+
+**Exceptions:** `OSError` for pipe, fork, descriptor, or wait operations; `Fallback` if a worker exits with the fallback status; `WorkerFailed` if a worker exits unsuccessfully for another reason.
+
+### `ranks_of(pieces)`
+
+```python
+ranks_of(pieces) -> tuple[int, int, int, int]
+```
+
+Combines byte buffers holding native unsigned integer (`array("I")`) values and returns `(count, p50, p95, p99)` using nearest-rank percentiles.
+
+**Parameters:** `pieces` is an iterable of compatible byte buffers. This is a low-level helper; normal callers should use `main` or `fast_main`.
+
+**Exceptions:** `ValueError` for byte buffers whose lengths are incompatible with `array.frombytes`; `IndexError` if called with no values. The driver calls it only for non-empty groups.
+
+### `Fallback` and `WorkerFailed`
+
+These exception classes coordinate fallback and worker retry behavior. `Fallback` signals that the reference parser should be used. `WorkerFailed` signals that a child process failed for a reason other than the input-data fallback condition. They are not result values.
+
+## 4. Code Examples
+
+### Create a sample log and run the command
+
+The following shell commands create a minimal input and process it:
+
+```bash
+mkdir -p data out
+cat > data/requests.log <<'EOF'
+2025-03-08T10:15:30.123456Z GET /api/items 200 1250
+2025-03-08T10:18:02.000000Z POST /api/items 503 8700
+2025-03-08T11:02:10.250000Z GET /api/items 200 900
+EOF
+python data_processor.py --data ./data --out ./out
+cat ./out/summary.txt
+```
+
+Example output (one row per hour and endpoint):
 
 ```text
-YYYY-MM-DDTHH:00:00Z endpoint request_count p50_us p95_us p99_us error_count error_rate_ppm
+2025-03-08T10:00:00Z /api/items 2 1250 8700 8700 1 500000
+2025-03-08T11:00:00Z /api/items 1 900 900 900 0 0
 ```
 
-Percentiles use the nearest-rank definition: rank `ceil(p * n / 100)`, one-based, for `p50`, `p95`, and `p99`. The error rate is integer-truncated parts per million: `error_count * 1_000_000 // request_count`. A status is an error when its numeric value is from 500 through 599, inclusive.
+### Import and call from Python
 
-For example, if a group has 10 requests, 2 5xx responses, and a p50 latency of 1250 microseconds, its row will include `10 ... 1250 ... 2 2000000` in the corresponding columns. An empty input file produces an empty `summary.txt`.
+```python
+from data_processor import main
 
-## Processing behavior
+main("./data", "./out")
+```
 
-The fast path divides the file into whole-line ranges, parses chunks, groups latencies and error counts by hour and endpoint, and computes percentiles. It uses optimized sorting/counting strategies and may distribute parsing and percentile work across forked processes. `--help` displays the accepted CLI syntax.
+The call reads `./data/requests.log` and writes `./out/summary.txt`. For ordinary use, call `main`; the chunk parsing, process management, and rank helpers are lower-level implementation interfaces.
 
-If the fast parser detects an unsupported input shape or an out-of-range latency, it raises its internal `Fallback` signal and the reference algorithm reparses the full file. Other fast-path failures cause a single-process retry, followed by a reference-path attempt if that retry also fails. Errors from the final reference pass (including missing input files, invalid timestamps, malformed records, and invalid integer fields) are not suppressed.
+## 5. Error Handling & Edge Cases
 
-## Operational notes
-
-- The program disables Python garbage collection in `main()` and does not re-enable it before exit; this is appropriate for its one-shot command-line execution model.
-- Input is read by file offsets. The file should remain unchanged during processing; a short read is treated as a reason to fall back.
-- Parallel execution depends on POSIX `fork`, pipes, and `pread`. Use a POSIX environment for the intended fast path.
-- The fallback parser expects UTF-8 text with exactly five single-space-separated fields per line. Malformed data can still fail in the fallback and will then raise its underlying exception.
+- **Empty input file:** The program creates an empty `summary.txt`.
+- **Malformed records:** The fast parser detects some unsupported shapes and falls back to the reference parser. The reference parser expects exactly five single-space-separated fields on each line. Missing fields, extra spaces, invalid timestamps, and invalid integer fields can raise `ValueError` (or `UnicodeDecodeError` for invalid UTF-8).
+- **Status codes:** The intended format is a numeric HTTP status. The fallback counts values from 500 through 599. In the optimized path, three-byte status fields are classified by whether their first byte is `5`; use valid three-digit numeric codes to ensure fast-path and fallback results agree.
+- **Latency values:** Latencies are integer microseconds. The fast path stores values as unsigned `array("I")`; negative or too-large values trigger fallback, whose Python integer path can handle them.
+- **Timestamps:** Use timestamps with fractional seconds and a timezone, preferably UTC `Z` timestamps. The fast parser is specialized for UTC-style timestamps ending in `Z`; the reference parser uses `%Y-%m-%dT%H:%M:%S.%f%z`.
+- **File I/O:** Missing or unreadable input and unwritable output raise filesystem exceptions if the final reference attempt also fails. The fast path treats a short read as a fallback condition because the file may have changed while it was being processed. Keep the input stable during a run.
+- **Worker failures:** A fast-path worker failure causes a serial retry through `main`; if that fails, `main` attempts the reference implementation. Failures in the final reference attempt propagate to the caller.
+- **Platform limitations:** The parallel fast path requires POSIX `fork` and `pread`. Run it in a supported POSIX environment.
+- **Chunk configuration:** `A_INGEST_CHUNK` must be a positive integer. Invalid values can fail during module import; zero is not a valid chunk size.
+- **Output values:** Percentiles are nearest-rank values at `ceil(p * n / 100)`. Error rate is integer-truncated parts per million: `errors * 1_000_000 // count`.
