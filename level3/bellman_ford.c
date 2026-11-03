@@ -2,94 +2,200 @@
 #include <stdlib.h>
 #include <limits.h>
 
-/**
- * Level 3: Optimization
- * 
- * Your task:
- * 1. Analyze the performance of the current Bellman-Ford implementation.
- * 2. It currently uses a basic edge list. Optimize it using a Fibonacci Heap 
- *    or simply improve the data structure for efficiency.
- * 3. Ensure all memory is managed correctly.
- */
+#define INF LLONG_MAX
 
-struct Edge {
+typedef struct {
     int src, dest, weight;
-};
+} Edge;
 
-struct Graph {
+/* CSR (compressed sparse row) graph: edges of vertex u are stored at
+ * indices offset[u] .. offset[u+1]-1 of dest[] / weight[]. */
+typedef struct {
     int V, E;
-    struct Edge* edge;
-};
+    int *offset;   /* V + 1 entries */
+    int *dest;     /* E entries */
+    int *weight;   /* E entries */
+} Graph;
 
-struct Graph* createGraph(int V, int E) {
-    struct Graph* graph = (struct Graph*)malloc(sizeof(struct Graph));
-    graph->V = V;
-    graph->E = E;
-    graph->edge = (struct Edge*)malloc(graph->E * sizeof(struct Edge));
-    return graph;
+typedef enum {
+    SP_OK = 0,
+    SP_NEGATIVE_CYCLE = 1,
+    SP_ERROR = -1
+} SpStatus;
+
+static void graph_destroy(Graph *g)
+{
+    if (g == NULL) {
+        return;
+    }
+    free(g->offset);
+    free(g->dest);
+    free(g->weight);
+    free(g);
 }
 
-void BellmanFord(struct Graph* graph, int src) {
-    int V = graph->V;
-    int E = graph->E;
-    int dist[V];
+static Graph *graph_create(int V, const Edge *edges, int E)
+{
+    if (V <= 0 || E < 0 || edges == NULL) {
+        return NULL;
+    }
 
-    for (int i = 0; i < V; i++)
-        dist[i] = INT_MAX;
+    Graph *g = calloc(1, sizeof *g);
+    if (g == NULL) {
+        return NULL;
+    }
+    g->V = V;
+    g->E = E;
+
+    size_t edge_slots = (E > 0) ? (size_t)E : 1;
+    g->offset = calloc((size_t)V + 1, sizeof *g->offset);
+    g->dest   = calloc(edge_slots, sizeof *g->dest);
+    g->weight = calloc(edge_slots, sizeof *g->weight);
+    int *next = malloc((size_t)V * sizeof *next);
+    if (!g->offset || !g->dest || !g->weight || !next) {
+        free(next);
+        graph_destroy(g);
+        return NULL;
+    }
+
+    /* Count out-degrees, validating endpoints. */
+    for (int i = 0; i < E; i++) {
+        if (edges[i].src < 0 || edges[i].src >= V ||
+            edges[i].dest < 0 || edges[i].dest >= V) {
+            free(next);
+            graph_destroy(g);
+            return NULL;
+        }
+        g->offset[edges[i].src + 1]++;
+    }
+
+    /* Prefix sums give each vertex's starting slot. */
+    for (int u = 0; u < V; u++) {
+        g->offset[u + 1] += g->offset[u];
+        next[u] = g->offset[u];
+    }
+
+    /* Place edges into their slots. */
+    for (int i = 0; i < E; i++) {
+        int slot = next[edges[i].src]++;
+        g->dest[slot]   = edges[i].dest;
+        g->weight[slot] = edges[i].weight;
+    }
+
+    free(next);
+    return g;
+}
+
+/* Fills dist[0..V-1]; unreachable vertices get INF. */
+static SpStatus shortest_paths(const Graph *g, int src, long long *dist)
+{
+    if (src < 0 || src >= g->V) {
+        return SP_ERROR;
+    }
+
+    int V = g->V;
+    int *queue    = malloc((size_t)V * sizeof *queue);   /* circular buffer */
+    int *path_len = calloc((size_t)V, sizeof *path_len); /* edges on best path */
+    char *in_queue = calloc((size_t)V, sizeof *in_queue);
+    if (!queue || !path_len || !in_queue) {
+        free(queue);
+        free(path_len);
+        free(in_queue);
+        return SP_ERROR;
+    }
+
+    for (int i = 0; i < V; i++) {
+        dist[i] = INF;
+    }
     dist[src] = 0;
 
-    for (int i = 1; i <= V - 1; i++) {
-        for (int j = 0; j < E; j++) {
-            int u = graph->edge[j].src;
-            int v = graph->edge[j].dest;
-            int weight = graph->edge[j].weight;
-            if (dist[u] != INT_MAX && dist[u] + weight < dist[v])
-                dist[v] = dist[u] + weight;
+    int head = 0, tail = 0, count = 0;
+    queue[tail] = src;
+    tail = (tail + 1) % V;
+    count++;
+    in_queue[src] = 1;
+
+    SpStatus status = SP_OK;
+
+    while (count > 0 && status == SP_OK) {
+        int u = queue[head];
+        head = (head + 1) % V;
+        count--;
+        in_queue[u] = 0;
+
+        for (int k = g->offset[u]; k < g->offset[u + 1]; k++) {
+            int v = g->dest[k];
+            long long cand = dist[u] + g->weight[k]; /* dist[u] is finite here */
+
+            if (cand < dist[v]) {
+                dist[v] = cand;
+                path_len[v] = path_len[u] + 1;
+
+                /* A shortest path has at most V-1 edges; more means a cycle. */
+                if (path_len[v] >= V) {
+                    status = SP_NEGATIVE_CYCLE;
+                    break;
+                }
+                if (!in_queue[v]) {
+                    queue[tail] = v;
+                    tail = (tail + 1) % V;
+                    count++;
+                    in_queue[v] = 1;
+                }
+            }
         }
     }
 
-    for (int i = 0; i < E; i++) {
-        int u = graph->edge[i].src;
-        int v = graph->edge[i].dest;
-        int weight = graph->edge[i].weight;
-        if (dist[u] != INT_MAX && dist[u] + weight < dist[v]) {
-            printf("Graph contains negative weight cycle\n");
-            return;
-        }
+    free(queue);
+    free(path_len);
+    free(in_queue);
+    return status;
+}
+
+int main(void)
+{
+    enum { V = 5 };
+    static const Edge edges[] = {
+        {0, 1, -1}, {0, 2,  4}, {1, 2,  3}, {1, 3,  2},
+        {1, 4,  2}, {3, 2,  5}, {3, 1,  1}, {4, 3, -3}
+    };
+    const int E = (int)(sizeof edges / sizeof edges[0]);
+
+    Graph *graph = graph_create(V, edges, E);
+    if (graph == NULL) {
+        fprintf(stderr, "Error: failed to create graph\n");
+        return EXIT_FAILURE;
     }
 
-    printf("Vertex Distance from Source\n");
-    for (int i = 0; i < V; ++i)
-        printf("%d \t\t %d\n", i, dist[i]);
-}
+    long long *dist = malloc((size_t)V * sizeof *dist);
+    if (dist == NULL) {
+        fprintf(stderr, "Error: memory allocation failed\n");
+        graph_destroy(graph);
+        return EXIT_FAILURE;
+    }
 
-void debugGraph(struct Graph* g) {
-    printf("DEBUG: Graph has %d vertices and %d edges.\n", g->V, g->E);
-}
+    int exit_code = EXIT_SUCCESS;
+    switch (shortest_paths(graph, 0, dist)) {
+    case SP_OK:
+        printf("Vertex\tDistance from Source\n");
+        for (int i = 0; i < V; i++) {
+            if (dist[i] == INF) {
+                printf("%d\t\tunreachable\n", i);
+            } else {
+                printf("%d\t\t%lld\n", i, dist[i]);
+            }
+        }
+        break;
+    case SP_NEGATIVE_CYCLE:
+        printf("Graph contains negative weight cycle\n");
+        break;
+    default:
+        fprintf(stderr, "Error: shortest path computation failed\n");
+        exit_code = EXIT_FAILURE;
+        break;
+    }
 
-void printEdge(struct Edge e) {
-    printf("Edge: %d -> %d (w: %d)\n", e.src, e.dest, e.weight);
-}
-
-
-int main() {
-    int V = 5;
-    int E = 8;
-    struct Graph* graph = createGraph(V, E);
-
-    graph->edge[0].src = 0; graph->edge[0].dest = 1; graph->edge[0].weight = -1;
-    graph->edge[1].src = 0; graph->edge[1].dest = 2; graph->edge[1].weight = 4;
-    graph->edge[2].src = 1; graph->edge[2].dest = 2; graph->edge[2].weight = 3;
-    graph->edge[3].src = 1; graph->edge[3].dest = 3; graph->edge[3].weight = 2;
-    graph->edge[4].src = 1; graph->edge[4].dest = 4; graph->edge[4].weight = 2;
-    graph->edge[5].src = 3; graph->edge[5].dest = 2; graph->edge[5].weight = 5;
-    graph->edge[6].src = 3; graph->edge[6].dest = 1; graph->edge[6].weight = 1;
-    graph->edge[7].src = 4; graph->edge[7].dest = 3; graph->edge[7].weight = -3;
-
-    BellmanFord(graph, 0);
-
-    free(graph->edge);
-    free(graph);
-
-    return 0;
+    free(dist);
+    graph_destroy(graph);
+    return exit_code;
 }
