@@ -21,6 +21,7 @@ letters (case-insensitively) fuse into one uppercase letter; a vowel meeting a
 consonant removes both. Reactions continue at the seam while the next pair
 reacts.
 
-The input must be a non-empty rectangular grid of single ASCII letters.
-Invalid cells or directions raise `ValueError`. With `R*C` cells and `P`
+The input must be a rectangular grid of single ASCII letters; an empty grid
+returns an empty list. Invalid cells or directions raise `ValueError`. With
+`R*C` cells and `P`
 letters in their piles, each fold takes O(R*C + P) time and O(R*C + P) space.
