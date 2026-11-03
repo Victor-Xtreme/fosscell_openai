@@ -70,6 +70,23 @@ def _count_errors(eps, sts, m):
     return errs
 
 
+def _to_uint32_array(latency_values):
+    """Convert latency tokens to the fast path's unsigned 32-bit representation."""
+    try:
+        return array("I", map(int, latency_values))
+    except (OverflowError, ValueError):
+        raise Fallback from None
+
+
+def _merge_group(acc, key, error_count, latency_values):
+    """Merge one parsed group into the per-worker accumulator."""
+    group = acc.get(key)
+    if group is None:
+        acc[key] = [error_count, latency_values]
+    else:
+        group[0] += error_count
+        group[1].extend(latency_values)
+
 def _add_segment(h, eps, sts, lats, acc):
     """All lines share the hour label h."""
     d = {}
@@ -82,16 +99,8 @@ def _add_segment(h, eps, sts, lats, acc):
     eget = errs.get
     for e, toks in d.items():
         key = (h, e)
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [eget(e, 0), arr]
-        else:
-            a[0] += eget(e, 0)
-            a[1].extend(arr)
+        latency_array = _to_uint32_array(toks)
+        _merge_group(acc, key, eget(e, 0), latency_array)
 
 
 def _add_general(ts, eps, sts, lats, acc):
@@ -108,16 +117,8 @@ def _add_general(ts, eps, sts, lats, acc):
         if s in s5:
             r[1] += 1
     for key, (toks, n5) in d.items():
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [n5, arr]
-        else:
-            a[0] += n5
-            a[1].extend(arr)
+        latency_array = _to_uint32_array(toks)
+        _merge_group(acc, key, n5, latency_array)
 
 
 def parse_chunk(buf, acc):
