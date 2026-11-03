@@ -1,95 +1,216 @@
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <limits.h>
-
-/**
- * Level 3: Optimization
- * 
- * Your task:
- * 1. Analyze the performance of the current Bellman-Ford implementation.
- * 2. It currently uses a basic edge list. Optimize it using a Fibonacci Heap 
- *    or simply improve the data structure for efficiency.
- * 3. Ensure all memory is managed correctly.
- */
 
 struct Edge {
-    int src, dest, weight;
+    int source;
+    int destination;
+    int weight;
 };
 
 struct Graph {
-    int V, E;
-    struct Edge* edge;
+    int vertex_count;
+    int edge_count;
+    struct Edge *edges;
 };
 
-struct Graph* createGraph(int V, int E) {
-    struct Graph* graph = (struct Graph*)malloc(sizeof(struct Graph));
-    graph->V = V;
-    graph->E = E;
-    graph->edge = (struct Edge*)malloc(graph->E * sizeof(struct Edge));
+enum BellmanFordStatus {
+    BELLMAN_FORD_SUCCESS,
+    BELLMAN_FORD_NEGATIVE_CYCLE,
+    BELLMAN_FORD_INVALID_GRAPH,
+    BELLMAN_FORD_DISTANCE_OVERFLOW
+};
+
+static struct Graph *create_graph(int vertex_count, int edge_count)
+{
+    if (vertex_count <= 0 || edge_count < 0 ||
+        (size_t)edge_count > SIZE_MAX / sizeof(struct Edge)) {
+        return NULL;
+    }
+
+    struct Graph *graph = malloc(sizeof(*graph));
+    if (graph == NULL) {
+        return NULL;
+    }
+
+    graph->vertex_count = vertex_count;
+    graph->edge_count = edge_count;
+    graph->edges = NULL;
+
+    if (edge_count > 0) {
+        graph->edges = malloc((size_t)edge_count * sizeof(*graph->edges));
+        if (graph->edges == NULL) {
+            free(graph);
+            return NULL;
+        }
+    }
+
     return graph;
 }
 
-void BellmanFord(struct Graph* graph, int src) {
-    int V = graph->V;
-    int E = graph->E;
-    int dist[V];
+static void destroy_graph(struct Graph *graph)
+{
+    if (graph != NULL) {
+        free(graph->edges);
+        free(graph);
+    }
+}
 
-    for (int i = 0; i < V; i++)
-        dist[i] = INT_MAX;
-    dist[src] = 0;
+static int add_weight(long long distance, int weight, long long *result)
+{
+    if ((weight > 0 && distance > LLONG_MAX - weight) ||
+        (weight < 0 && distance < LLONG_MIN - weight)) {
+        return 0;
+    }
 
-    for (int i = 1; i <= V - 1; i++) {
-        for (int j = 0; j < E; j++) {
-            int u = graph->edge[j].src;
-            int v = graph->edge[j].dest;
-            int weight = graph->edge[j].weight;
-            if (dist[u] != INT_MAX && dist[u] + weight < dist[v])
-                dist[v] = dist[u] + weight;
+    *result = distance + weight;
+    return 1;
+}
+
+static enum BellmanFordStatus bellman_ford(
+    const struct Graph *graph,
+    int source,
+    long long distances[])
+{
+    if (graph == NULL || distances == NULL ||
+        graph->vertex_count <= 0 || graph->edge_count < 0 ||
+        source < 0 || source >= graph->vertex_count ||
+        (graph->edge_count > 0 && graph->edges == NULL)) {
+        return BELLMAN_FORD_INVALID_GRAPH;
+    }
+
+    for (int edge_index = 0; edge_index < graph->edge_count; edge_index++) {
+        const struct Edge *edge = &graph->edges[edge_index];
+        if (edge->source < 0 || edge->source >= graph->vertex_count ||
+            edge->destination < 0 || edge->destination >= graph->vertex_count) {
+            return BELLMAN_FORD_INVALID_GRAPH;
         }
     }
 
-    for (int i = 0; i < E; i++) {
-        int u = graph->edge[i].src;
-        int v = graph->edge[i].dest;
-        int weight = graph->edge[i].weight;
-        if (dist[u] != INT_MAX && dist[u] + weight < dist[v]) {
-            printf("Graph contains negative weight cycle\n");
-            return;
+    for (int vertex = 0; vertex < graph->vertex_count; vertex++) {
+        distances[vertex] = LLONG_MAX;
+    }
+    distances[source] = 0;
+
+    /*
+     * Bellman-Ford supports negative weights. Its worst-case complexity remains
+     * O(V * E); stopping when a pass makes no updates avoids unnecessary passes.
+     */
+    for (int iteration = 1; iteration < graph->vertex_count; iteration++) {
+        int updated = 0;
+
+        for (int edge_index = 0; edge_index < graph->edge_count; edge_index++) {
+            const struct Edge *edge = &graph->edges[edge_index];
+            if (distances[edge->source] == LLONG_MAX) {
+                continue;
+            }
+
+            long long candidate_distance;
+            if (!add_weight(
+                    distances[edge->source],
+                    edge->weight,
+                    &candidate_distance)) {
+                return BELLMAN_FORD_DISTANCE_OVERFLOW;
+            }
+
+            if (candidate_distance < distances[edge->destination]) {
+                distances[edge->destination] = candidate_distance;
+                updated = 1;
+            }
+        }
+
+        if (!updated) {
+            break;
         }
     }
 
-    printf("Vertex Distance from Source\n");
-    for (int i = 0; i < V; ++i)
-        printf("%d \t\t %d\n", i, dist[i]);
+    for (int edge_index = 0; edge_index < graph->edge_count; edge_index++) {
+        const struct Edge *edge = &graph->edges[edge_index];
+        if (distances[edge->source] == LLONG_MAX) {
+            continue;
+        }
+
+        long long candidate_distance;
+        if (!add_weight(
+                distances[edge->source],
+                edge->weight,
+                &candidate_distance)) {
+            return BELLMAN_FORD_DISTANCE_OVERFLOW;
+        }
+
+        if (candidate_distance < distances[edge->destination]) {
+            return BELLMAN_FORD_NEGATIVE_CYCLE;
+        }
+    }
+
+    return BELLMAN_FORD_SUCCESS;
 }
 
-void debugGraph(struct Graph* g) {
-    printf("DEBUG: Graph has %d vertices and %d edges.\n", g->V, g->E);
-}
+int main(void)
+{
+    const int vertex_count = 5;
+    const struct Edge initial_edges[] = {
+        {0, 1, -1},
+        {0, 2, 4},
+        {1, 2, 3},
+        {1, 3, 2},
+        {1, 4, 2},
+        {3, 2, 5},
+        {3, 1, 1},
+        {4, 3, -3}
+    };
+    const int edge_count =
+        (int)(sizeof(initial_edges) / sizeof(initial_edges[0]));
 
-void printEdge(struct Edge e) {
-    printf("Edge: %d -> %d (w: %d)\n", e.src, e.dest, e.weight);
-}
+    struct Graph *graph = create_graph(vertex_count, edge_count);
+    if (graph == NULL) {
+        fprintf(stderr, "Error: unable to allocate the graph.\n");
+        return EXIT_FAILURE;
+    }
 
+    for (int edge_index = 0; edge_index < edge_count; edge_index++) {
+        graph->edges[edge_index] = initial_edges[edge_index];
+    }
 
-int main() {
-    int V = 5;
-    int E = 8;
-    struct Graph* graph = createGraph(V, E);
+    if ((size_t)vertex_count > SIZE_MAX / sizeof(long long)) {
+        fprintf(stderr, "Error: distance array is too large.\n");
+        destroy_graph(graph);
+        return EXIT_FAILURE;
+    }
 
-    graph->edge[0].src = 0; graph->edge[0].dest = 1; graph->edge[0].weight = -1;
-    graph->edge[1].src = 0; graph->edge[1].dest = 2; graph->edge[1].weight = 4;
-    graph->edge[2].src = 1; graph->edge[2].dest = 2; graph->edge[2].weight = 3;
-    graph->edge[3].src = 1; graph->edge[3].dest = 3; graph->edge[3].weight = 2;
-    graph->edge[4].src = 1; graph->edge[4].dest = 4; graph->edge[4].weight = 2;
-    graph->edge[5].src = 3; graph->edge[5].dest = 2; graph->edge[5].weight = 5;
-    graph->edge[6].src = 3; graph->edge[6].dest = 1; graph->edge[6].weight = 1;
-    graph->edge[7].src = 4; graph->edge[7].dest = 3; graph->edge[7].weight = -3;
+    long long *distances =
+        malloc((size_t)vertex_count * sizeof(*distances));
+    if (distances == NULL) {
+        fprintf(stderr, "Error: unable to allocate the distance array.\n");
+        destroy_graph(graph);
+        return EXIT_FAILURE;
+    }
 
-    BellmanFord(graph, 0);
+    enum BellmanFordStatus status = bellman_ford(graph, 0, distances);
+    int exit_status = EXIT_SUCCESS;
 
-    free(graph->edge);
-    free(graph);
+    if (status == BELLMAN_FORD_NEGATIVE_CYCLE) {
+        printf("Graph contains a negative weight cycle.\n");
+    } else if (status == BELLMAN_FORD_INVALID_GRAPH) {
+        fprintf(stderr, "Error: invalid graph or source vertex.\n");
+        exit_status = EXIT_FAILURE;
+    } else if (status == BELLMAN_FORD_DISTANCE_OVERFLOW) {
+        fprintf(stderr, "Error: path distance exceeds the supported range.\n");
+        exit_status = EXIT_FAILURE;
+    } else {
+        printf("Vertex Distance from Source\n");
+        for (int vertex = 0; vertex < vertex_count; vertex++) {
+            printf("%d\t\t", vertex);
+            if (distances[vertex] == LLONG_MAX) {
+                printf("INF\n");
+            } else {
+                printf("%lld\n", distances[vertex]);
+            }
+        }
+    }
 
-    return 0;
+    free(distances);
+    destroy_graph(graph);
+    return exit_status;
 }
