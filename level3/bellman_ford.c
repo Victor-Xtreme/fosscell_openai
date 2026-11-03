@@ -1,95 +1,181 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+#include <stdint.h>
 
-/**
- * Level 3: Optimization
- * 
- * Your task:
- * 1. Analyze the performance of the current Bellman-Ford implementation.
- * 2. It currently uses a basic edge list. Optimize it using a Fibonacci Heap 
- *    or simply improve the data structure for efficiency.
- * 3. Ensure all memory is managed correctly.
- */
+#define INF LLONG_MAX
 
-struct Edge {
-    int src, dest, weight;
-};
+typedef struct {
+    int src;
+    int dest;
+    int weight;
+} Edge;
 
-struct Graph {
-    int V, E;
-    struct Edge* edge;
-};
+typedef struct {
+    int V;
+    int E;
+    Edge *edge;
+} Graph;
 
-struct Graph* createGraph(int V, int E) {
-    struct Graph* graph = (struct Graph*)malloc(sizeof(struct Graph));
+// Create graph safely
+Graph *create_graph(int V, int E) {
+    if (V <= 0 || E < 0) {
+        return NULL;
+    }
+
+    if ((size_t)E > SIZE_MAX / sizeof(Edge)) {
+        return NULL;
+    }
+
+    Graph *graph = malloc(sizeof(Graph));
+
+    if (graph == NULL) {
+        return NULL;
+    }
+
     graph->V = V;
     graph->E = E;
-    graph->edge = (struct Edge*)malloc(graph->E * sizeof(struct Edge));
+    graph->edge = NULL;
+
+    if (E > 0) {
+        graph->edge = malloc((size_t)E * sizeof(Edge));
+
+        if (graph->edge == NULL) {
+            free(graph);
+            return NULL;
+        }
+    }
+
     return graph;
 }
 
-void BellmanFord(struct Graph* graph, int src) {
+// Free graph memory
+void free_graph(Graph *graph) {
+    if (graph != NULL) {
+        free(graph->edge);
+        free(graph);
+    }
+}
+
+// Bellman-Ford shortest path algorithm
+int bellman_ford(const Graph *graph, int src) {
+    if (graph == NULL || src < 0 || src >= graph->V) {
+        fprintf(stderr, "Invalid graph or source vertex.\n");
+        return 0;
+    }
+
     int V = graph->V;
     int E = graph->E;
-    int dist[V];
 
-    for (int i = 0; i < V; i++)
-        dist[i] = INT_MAX;
+    // Validate edge endpoints
+    for (int i = 0; i < E; i++) {
+        if (graph->edge[i].src < 0 ||
+            graph->edge[i].src >= V ||
+            graph->edge[i].dest < 0 ||
+            graph->edge[i].dest >= V) {
+
+            fprintf(stderr, "Invalid edge detected.\n");
+            return 0;
+        }
+    }
+
+    // Allocate distance array
+    long long *dist = malloc((size_t)V * sizeof(*dist));
+
+    if (dist == NULL) {
+        fprintf(stderr, "Memory allocation failed.\n");
+        return 0;
+    }
+
+    // Initialize distances
+    for (int i = 0; i < V; i++) {
+        dist[i] = INF;
+    }
+
     dist[src] = 0;
 
-    for (int i = 1; i <= V - 1; i++) {
+    // Relax edges
+    for (int i = 0; i < V - 1; i++) {
+        int updated = 0;
+
         for (int j = 0; j < E; j++) {
             int u = graph->edge[j].src;
             int v = graph->edge[j].dest;
             int weight = graph->edge[j].weight;
-            if (dist[u] != INT_MAX && dist[u] + weight < dist[v])
+
+            if (dist[u] != INF &&
+                dist[u] + weight < dist[v]) {
+
                 dist[v] = dist[u] + weight;
+                updated = 1;
+            }
+        }
+
+        // Optimization: stop if no distance changed
+        if (!updated) {
+            break;
         }
     }
 
+    // Detect reachable negative-weight cycles
     for (int i = 0; i < E; i++) {
         int u = graph->edge[i].src;
         int v = graph->edge[i].dest;
         int weight = graph->edge[i].weight;
-        if (dist[u] != INT_MAX && dist[u] + weight < dist[v]) {
-            printf("Graph contains negative weight cycle\n");
-            return;
+
+        if (dist[u] != INF &&
+            dist[u] + weight < dist[v]) {
+
+            printf("Graph contains a reachable negative-weight cycle.\n");
+            free(dist);
+            return 0;
         }
     }
 
-    printf("Vertex Distance from Source\n");
-    for (int i = 0; i < V; ++i)
-        printf("%d \t\t %d\n", i, dist[i]);
+    // Print shortest distances
+    printf("\nVertex\tDistance from Source\n");
+
+    for (int i = 0; i < V; i++) {
+        if (dist[i] == INF) {
+            printf("%d\tINF\n", i);
+        } else {
+            printf("%d\t%lld\n", i, dist[i]);
+        }
+    }
+
+    free(dist);
+    return 1;
 }
 
-void debugGraph(struct Graph* g) {
-    printf("DEBUG: Graph has %d vertices and %d edges.\n", g->V, g->E);
-}
-
-void printEdge(struct Edge e) {
-    printf("Edge: %d -> %d (w: %d)\n", e.src, e.dest, e.weight);
-}
-
-
-int main() {
+int main(void) {
     int V = 5;
     int E = 8;
-    struct Graph* graph = createGraph(V, E);
 
-    graph->edge[0].src = 0; graph->edge[0].dest = 1; graph->edge[0].weight = -1;
-    graph->edge[1].src = 0; graph->edge[1].dest = 2; graph->edge[1].weight = 4;
-    graph->edge[2].src = 1; graph->edge[2].dest = 2; graph->edge[2].weight = 3;
-    graph->edge[3].src = 1; graph->edge[3].dest = 3; graph->edge[3].weight = 2;
-    graph->edge[4].src = 1; graph->edge[4].dest = 4; graph->edge[4].weight = 2;
-    graph->edge[5].src = 3; graph->edge[5].dest = 2; graph->edge[5].weight = 5;
-    graph->edge[6].src = 3; graph->edge[6].dest = 1; graph->edge[6].weight = 1;
-    graph->edge[7].src = 4; graph->edge[7].dest = 3; graph->edge[7].weight = -3;
+    Graph *graph = create_graph(V, E);
 
-    BellmanFord(graph, 0);
+    if (graph == NULL) {
+        fprintf(stderr, "Graph creation failed.\n");
+        return EXIT_FAILURE;
+    }
 
-    free(graph->edge);
-    free(graph);
+    Edge edges[] = {
+        {0, 1, -1},
+        {0, 2, 4},
+        {1, 2, 3},
+        {1, 3, 2},
+        {1, 4, 2},
+        {3, 2, 5},
+        {3, 1, 1},
+        {4, 3, -3}
+    };
 
-    return 0;
+    for (int i = 0; i < E; i++) {
+        graph->edge[i] = edges[i];
+    }
+
+    bellman_ford(graph, 0);
+
+    free_graph(graph);
+
+    return EXIT_SUCCESS;
 }
