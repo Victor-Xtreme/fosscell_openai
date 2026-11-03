@@ -70,6 +70,21 @@ def _count_errors(eps, sts, m):
     return errs
 
 
+# Shared accumulator update factored out of _add_segment and _add_general.
+def _merge_group(key, latency_tokens, error_count, acc):
+    """Convert latencies and merge one (hour, endpoint) group into the accumulator."""
+    try:
+        latencies = array("I", map(int, latency_tokens))
+    except (OverflowError, ValueError):
+        raise Fallback
+    group = acc.get(key)
+    if group is None:
+        acc[key] = [error_count, latencies]
+    else:
+        group[0] += error_count
+        group[1].extend(latencies)
+
+
 def _add_segment(h, eps, sts, lats, acc):
     """All lines share the hour label h."""
     d = {}
@@ -81,17 +96,8 @@ def _add_segment(h, eps, sts, lats, acc):
     errs = _count_errors(eps, sts, len(eps))
     eget = errs.get
     for e, toks in d.items():
-        key = (h, e)
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [eget(e, 0), arr]
-        else:
-            a[0] += eget(e, 0)
-            a[1].extend(arr)
+        # Use the shared conversion and accumulator merge helper.
+        _merge_group((h, e), toks, eget(e, 0), acc)
 
 
 def _add_general(ts, eps, sts, lats, acc):
@@ -108,16 +114,8 @@ def _add_general(ts, eps, sts, lats, acc):
         if s in s5:
             r[1] += 1
     for key, (toks, n5) in d.items():
-        try:
-            arr = array("I", map(int, toks))
-        except (OverflowError, ValueError):
-            raise Fallback
-        a = acc.get(key)
-        if a is None:
-            acc[key] = [n5, arr]
-        else:
-            a[0] += n5
-            a[1].extend(arr)
+        # Use the same merge path as the single-hour segment case.
+        _merge_group(key, toks, n5, acc)
 
 
 def parse_chunk(buf, acc):
