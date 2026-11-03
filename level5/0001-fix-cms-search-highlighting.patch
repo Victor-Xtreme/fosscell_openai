@@ -1,0 +1,89 @@
+From b21dbe6da6d71f6c7cee24aa34e8807cffdaa160 Mon Sep 17 00:00:00 2001
+From: keshavmahesh06 <keshavmahesh06@gmail.com>
+Date: Tue, 3 Nov 2026 19:57:39 +0530
+Subject: [PATCH] Fix CMS search highlighting for HTML special characters
+
+---
+ Plastopol CMS/package.json          |  1 +
+ Plastopol CMS/src/lib/search.ts     |  8 ++++++-
+ Plastopol CMS/tests/search.test.mjs | 37 +++++++++++++++++++++++++++++
+ 3 files changed, 45 insertions(+), 1 deletion(-)
+ create mode 100644 Plastopol CMS/tests/search.test.mjs
+
+diff --git a/Plastopol CMS/package.json b/Plastopol CMS/package.json
+index db7a950..540c8ad 100644
+--- a/Plastopol CMS/package.json	
++++ b/Plastopol CMS/package.json	
+@@ -4,6 +4,7 @@
+   "version": "0.1.0",
+   "type": "module",
+   "scripts": {
++  "test": "node --experimental-strip-types --test tests/*.test.mjs",
+   "dev": "tauri dev",
+   "frontend": "vite",
+   "build": "tauri build",
+diff --git a/Plastopol CMS/src/lib/search.ts b/Plastopol CMS/src/lib/search.ts
+index 9c03ec6..ede4cd8 100644
+--- a/Plastopol CMS/src/lib/search.ts	
++++ b/Plastopol CMS/src/lib/search.ts	
+@@ -35,7 +35,13 @@ export function highlightText(text: string, query: string): string {
+   if (!query.trim()) return escapeHtml(text);
+   const escaped = escapeRegex(query.trim());
+   const re = new RegExp(`(${escaped})`, "gi");
+-  return escapeHtml(text).replace(re, "<mark>$1</mark>");
++  // Match original text so HTML entities cannot be split or matched by accident.
++  return text
++    .split(re)
++    .map((part, index) =>
++      index % 2 === 1 ? `<mark>${escapeHtml(part)}</mark>` : escapeHtml(part)
++    )
++    .join("");
+ }
+ 
+ function escapeHtml(str: string): string {
+diff --git a/Plastopol CMS/tests/search.test.mjs b/Plastopol CMS/tests/search.test.mjs
+new file mode 100644
+index 0000000..75b89f6
+--- /dev/null
++++ b/Plastopol CMS/tests/search.test.mjs	
+@@ -0,0 +1,37 @@
++// Run with Node.js 22.6+ using npm test in Plastopol CMS.
++import assert from "node:assert/strict";
++import test from "node:test";
++import { highlightText } from "../src/lib/search.ts";
++
++test("highlights matches case-insensitively while preserving case", () => {
++  assert.equal(highlightText("Chair CHAIR", " chair "), "<mark>Chair</mark> <mark>CHAIR</mark>");
++});
++
++test("matches ampersands and angle brackets before HTML escaping", () => {
++  assert.equal(highlightText("A & B", "&"), "A <mark>&amp;</mark> B");
++  assert.equal(highlightText("<chair>", "<chair>"), "<mark>&lt;chair&gt;</mark>");
++});
++
++test("does not match or corrupt generated HTML entities", () => {
++  assert.equal(highlightText("A & B", "amp"), "A &amp; B");
++  assert.equal(highlightText("<chair>", "lt"), "&lt;chair&gt;");
++  assert.equal(highlightText("A & B amp", "amp"), "A &amp; B <mark>amp</mark>");
++});
++
++test("treats regular expression syntax as literal text", () => {
++  assert.equal(highlightText("a+b [x] a+b", "a+b"), "<mark>a+b</mark> [x] <mark>a+b</mark>");
++  assert.equal(highlightText("[x]", "[x]"), "<mark>[x]</mark>");
++  assert.equal(highlightText("$&", "$&"), "<mark>$&amp;</mark>");
++});
++
++test("escapes HTML-like content even inside a highlighted match", () => {
++  assert.equal(highlightText('<img src=x onerror="alert(1)">', '<img'),
++    '<mark>&lt;img</mark> src=x onerror="alert(1)"&gt;');
++});
++
++test("handles empty queries, no matches, and empty text", () => {
++  assert.equal(highlightText("<&>", "  "), "&lt;&amp;&gt;");
++  assert.equal(highlightText("<&>", "chair"), "&lt;&amp;&gt;");
++  assert.equal(highlightText("", "chair"), "");
++  assert.equal(highlightText("", ""), "");
++});
+-- 
+2.50.1 (Apple Git-155)
+
